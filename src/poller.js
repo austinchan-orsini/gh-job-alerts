@@ -17,18 +17,27 @@ import { sendJobAlert } from "./sms.js";
 
 const DRY_RUN = process.env.DRY_RUN === "true";
 
+export let lastPollSummary = null;
+
 export async function pollAll() {
   const repos = listRepos().filter((r) => r.enabled);
   console.log(`[poller] Checking ${repos.length} repo(s)…`);
 
+  let totalAlerts = 0;
+  const repoResults = [];
+
   for (const repo of repos) {
     try {
-      await pollRepo(repo);
+      const alerts = await pollRepo(repo);
+      totalAlerts += alerts;
+      repoResults.push({ repo: `${repo.owner}/${repo.name}`, alerts, error: null });
     } catch (err) {
       console.error(`[poller] Error polling ${repo.owner}/${repo.name}:`, err.message);
+      repoResults.push({ repo: `${repo.owner}/${repo.name}`, alerts: 0, error: err.message });
     }
   }
 
+  lastPollSummary = { completedAt: new Date().toISOString(), totalAlerts, repoResults };
   console.log("[poller] Done.");
 }
 
@@ -36,6 +45,7 @@ async function pollRepo(repo) {
   const { id, owner, name, branch, file_path, last_sha, label } = repo;
   const repoSlug = `${owner}/${name}`;
   const repoLabel = label || name;
+  let totalAlerts = 0;
 
   const { newCommits, latestSha, firstRun } = await getNewCommits(
     owner,
@@ -48,17 +58,15 @@ async function pollRepo(repo) {
   if (firstRun) {
     console.log(`[${repoSlug}] First run — recording baseline SHA ${latestSha?.slice(0, 7)}`);
     if (latestSha) updateLastSha(id, latestSha);
-    return;
+    return 0;
   }
 
   if (newCommits.length === 0) {
     console.log(`[${repoSlug}] No new commits.`);
-    return;
+    return 0;
   }
 
   console.log(`[${repoSlug}] ${newCommits.length} new commit(s) to process.`);
-
-  let totalAlerts = 0;
 
   for (const commit of newCommits) {
     const sha = commit.sha;
@@ -113,6 +121,7 @@ async function pollRepo(repo) {
   // Update baseline to latest processed commit
   updateLastSha(id, latestSha);
   console.log(`[${repoSlug}] Sent ${totalAlerts} alert(s). SHA → ${latestSha?.slice(0, 7)}`);
+  return totalAlerts;
 }
 
 function sleep(ms) {

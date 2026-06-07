@@ -15,7 +15,8 @@
 import express from "express";
 import { listRepos, addRepo, removeRepo, toggleRepo, recentAlerts } from "./db.js";
 import { getRateLimit } from "./github.js";
-import { pollAll } from "./poller.js";
+import { pollAll, lastPollSummary } from "./poller.js";
+import { sendJobAlert } from "./sms.js";
 
 export function createServer() {
   const app = express();
@@ -26,7 +27,7 @@ export function createServer() {
   app.get("/", (req, res) => {
     const repos = listRepos();
     const alerts = recentAlerts(20);
-    res.send(renderDashboard(repos, alerts, req.query.msg));
+    res.send(renderDashboard(repos, alerts, req.query.msg, lastPollSummary));
   });
 
   // ── Add repo ────────────────────────────────────────────────────────────────
@@ -65,8 +66,20 @@ export function createServer() {
   // ── Manual poll ─────────────────────────────────────────────────────────────
   app.post("/poll", async (req, res) => {
     res.redirect("/?msg=Polling+started…");
-    // Run in background so the redirect lands immediately
     pollAll().catch(console.error);
+  });
+
+  // ── Test SMS ─────────────────────────────────────────────────────────────────
+  app.post("/test-sms", async (req, res) => {
+    try {
+      await sendJobAlert(
+        { company: "Acme Corp", role: "Software Engineer Intern", location: "Remote", applyUrl: "https://example.com" },
+        "Test Alert"
+      );
+      res.redirect("/?msg=Test+SMS+sent+%E2%9C%93+%E2%80%94+check+your+phone");
+    } catch (err) {
+      res.redirect("/?msg=SMS+failed:+" + encodeURIComponent(err.message));
+    }
   });
 
   // ── JSON API ─────────────────────────────────────────────────────────────────
@@ -101,7 +114,11 @@ function parseGithubUrl(raw) {
 
 // ── HTML renderer ─────────────────────────────────────────────────────────────
 
-function renderDashboard(repos, alerts, msg) {
+function escapeHtml(str) {
+  return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function renderDashboard(repos, alerts, msg, pollSummary) {
   const repoRows = repos.length
     ? repos
         .map(
@@ -137,12 +154,22 @@ function renderDashboard(repos, alerts, msg) {
         .join("")
     : `<tr><td colspan="4" style="text-align:center;color:#888">No alerts sent yet</td></tr>`;
 
+  const isPolling = msg && decodeURIComponent(msg).includes("Polling");
+
+  const pollStatus = pollSummary
+    ? pollSummary.repoResults.map((r) => {
+        if (r.error) return `<span style="color:#ef4444">⚠ ${escapeHtml(r.repo)}: ${escapeHtml(r.error)}</span>`;
+        return `${escapeHtml(r.repo)}: ${r.alerts > 0 ? `<strong>${r.alerts} alert(s) sent</strong>` : "no new commits"}`;
+      }).join(" &nbsp;|&nbsp; ")
+    : "No poll run yet";
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>gh-job-alerts</title>
+  ${isPolling ? `<script>setTimeout(() => location.href = "/", 6000)</script>` : ""}
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #222; }
@@ -179,7 +206,8 @@ function renderDashboard(repos, alerts, msg) {
   <small>SMS alerts for GitHub job boards</small>
 </header>
 <main>
-  ${msg ? `<div class="msg">${decodeURIComponent(msg)}</div>` : ""}
+  ${msg ? `<div class="msg">${escapeHtml(decodeURIComponent(msg))}${isPolling ? " <small>(refreshing in a few seconds…)</small>" : ""}</div>` : ""}
+  <div style="font-size:.8rem;color:#888;margin-bottom:1rem">Last poll: ${pollSummary ? `${pollSummary.completedAt.slice(0,16).replace("T"," ")} UTC &mdash; ${pollStatus}` : "not yet run"}</div>
 
   <div class="card">
     <h2>Watched repos</h2>
@@ -214,9 +242,12 @@ function renderDashboard(repos, alerts, msg) {
       </div>
     </form>
 
-    <div class="poll-form">
+    <div class="poll-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
       <form method="POST" action="/poll">
         <button type="submit" class="btn-ok">▶ Poll now</button>
+      </form>
+      <form method="POST" action="/test-sms">
+        <button type="submit" class="btn-warn">📱 Send test SMS</button>
       </form>
     </div>
   </div>
