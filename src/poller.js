@@ -14,6 +14,7 @@ import { listRepos, updateLastSha, isJobSeen, markJobSeen, logAlert } from "./db
 import { getNewCommits, getCommitPatch, getFileAtSha } from "./github.js";
 import { extractJobsFromPatch, extractJobsFromFullDiff } from "./parser.js";
 import { sendJobAlert } from "./sms.js";
+import { sendDiscordAlert } from "./discord.js";
 
 const DRY_RUN = process.env.DRY_RUN === "true";
 
@@ -104,17 +105,32 @@ async function pollRepo(repo) {
         continue;
       }
 
-      try {
-        const smsSid = await sendJobAlert(job, repoLabel);
-        logAlert({ repoId: id, company: job.company, role: job.role, smsSid });
-        console.log(`  ✅ SMS sent: ${job.company} — ${job.role} (${smsSid})`);
-        totalAlerts++;
+      let alerted = false;
 
-        // Small delay to avoid Twilio rate limits
-        await sleep(500);
-      } catch (err) {
-        console.error(`  ❌ SMS failed for ${job.company}:`, err.message);
+      if (process.env.TWILIO_ACCOUNT_SID) {
+        try {
+          const smsSid = await sendJobAlert(job, repoLabel);
+          logAlert({ repoId: id, company: job.company, role: job.role, smsSid });
+          console.log(`  ✅ SMS sent: ${job.company} — ${job.role}`);
+          alerted = true;
+          await sleep(500);
+        } catch (err) {
+          console.error(`  ❌ SMS failed for ${job.company}:`, err.message);
+        }
       }
+
+      if (process.env.DISCORD_WEBHOOK_URL) {
+        try {
+          await sendDiscordAlert(job, repoLabel);
+          if (!alerted) logAlert({ repoId: id, company: job.company, role: job.role, smsSid: null });
+          console.log(`  ✅ Discord sent: ${job.company} — ${job.role}`);
+          alerted = true;
+        } catch (err) {
+          console.error(`  ❌ Discord failed for ${job.company}:`, err.message);
+        }
+      }
+
+      if (alerted) totalAlerts++;
     }
   }
 

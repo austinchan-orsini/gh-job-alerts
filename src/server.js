@@ -17,6 +17,7 @@ import { listRepos, addRepo, removeRepo, toggleRepo, recentAlerts } from "./db.j
 import { getRateLimit } from "./github.js";
 import { pollAll, lastPollSummary } from "./poller.js";
 import { sendJobAlert } from "./sms.js";
+import { sendDiscordAlert } from "./discord.js";
 
 export function createServer() {
   const app = express();
@@ -67,6 +68,19 @@ export function createServer() {
   app.post("/poll", async (req, res) => {
     res.redirect("/?msg=Polling+started…");
     pollAll().catch(console.error);
+  });
+
+  // ── Test Discord ─────────────────────────────────────────────────────────────
+  app.post("/test-discord", async (req, res) => {
+    try {
+      await sendDiscordAlert(
+        { company: "Acme Corp", role: "Software Engineer Intern", location: "Remote", applyUrl: "https://example.com" },
+        "Test Alert"
+      );
+      res.redirect("/?msg=Discord+test+sent+%E2%9C%93+%E2%80%94+check+your+server");
+    } catch (err) {
+      res.redirect("/?msg=Discord+failed:+" + encodeURIComponent(err.message));
+    }
   });
 
   // ── Test SMS ─────────────────────────────────────────────────────────────────
@@ -248,6 +262,9 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
       </form>
       <form method="POST" action="/test-sms">
         <button type="submit" class="btn-warn">📱 Send test SMS</button>
+      </form>
+      <form method="POST" action="/test-discord">
+        <button type="submit" class="btn-primary">🎮 Send test Discord</button>
       </form>
     </div>
   </div>
