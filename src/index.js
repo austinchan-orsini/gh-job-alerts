@@ -10,14 +10,6 @@ import "dotenv/config";
 import cron from "node-cron";
 import { createServer } from "./server.js";
 import { pollAll } from "./poller.js";
-import { getDb } from "./db.js";
-import { mkdirSync } from "fs";
-
-// Ensure data directory exists before DB initialises
-mkdirSync("data", { recursive: true });
-
-// Touch the DB (creates tables if not exists)
-getDb();
 
 const PORT = process.env.PORT || 3000;
 const POLL_CRON = process.env.POLL_CRON || "*/10 * * * *";

@@ -1,125 +1,154 @@
-import Database from "better-sqlite3";
+import initSqlJs from "sql.js";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "../data/alerts.db");
 
-let _db;
+mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
-export function getDb() {
-  if (_db) return _db;
+const SQL = await initSqlJs({
+  locateFile: (file) => path.join(__dirname, "../node_modules/sql.js/dist", file),
+});
 
-  // Ensure data dir exists
-  import("fs").then((fs) => fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }));
+const _db = existsSync(DB_PATH)
+  ? new SQL.Database(readFileSync(DB_PATH))
+  : new SQL.Database();
 
-  _db = new Database(DB_PATH);
-  _db.pragma("journal_mode = WAL");
+_db.run(`
+  CREATE TABLE IF NOT EXISTS repos (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner       TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    branch      TEXT NOT NULL DEFAULT 'main',
+    file_path   TEXT NOT NULL DEFAULT 'README.md',
+    label       TEXT,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    last_sha    TEXT,
+    added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(owner, name, file_path)
+  )
+`);
 
-  _db.exec(`
-    CREATE TABLE IF NOT EXISTS repos (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      owner       TEXT NOT NULL,
-      name        TEXT NOT NULL,
-      branch      TEXT NOT NULL DEFAULT 'main',
-      file_path   TEXT NOT NULL DEFAULT 'README.md',
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1,
-      last_sha    TEXT,
-      added_at    TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(owner, name, file_path)
-    );
+_db.run(`
+  CREATE TABLE IF NOT EXISTS seen_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id     INTEGER NOT NULL,
+    job_hash    TEXT NOT NULL,
+    company     TEXT,
+    role        TEXT,
+    location    TEXT,
+    apply_url   TEXT,
+    seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(repo_id, job_hash)
+  )
+`);
 
-    CREATE TABLE IF NOT EXISTS seen_jobs (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      repo_id     INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-      job_hash    TEXT NOT NULL,
-      company     TEXT,
-      role        TEXT,
-      location    TEXT,
-      apply_url   TEXT,
-      seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(repo_id, job_hash)
-    );
+_db.run(`
+  CREATE TABLE IF NOT EXISTS alert_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id     INTEGER,
+    company     TEXT,
+    role        TEXT,
+    sms_sid     TEXT,
+    sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
 
-    CREATE TABLE IF NOT EXISTS alert_log (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      repo_id     INTEGER REFERENCES repos(id) ON DELETE SET NULL,
-      company     TEXT,
-      role        TEXT,
-      sms_sid     TEXT,
-      sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
+save();
 
-  return _db;
+function save() {
+  writeFileSync(DB_PATH, Buffer.from(_db.export()));
+}
+
+function dbRun(sql, params = []) {
+  _db.run(sql, params);
+  const changes = _db.getRowsModified();
+  save();
+  return { changes };
+}
+
+function dbGet(sql, params = []) {
+  const stmt = _db.prepare(sql);
+  stmt.bind(params);
+  const row = stmt.step() ? stmt.getAsObject() : null;
+  stmt.free();
+  return row;
+}
+
+function dbAll(sql, params = []) {
+  const stmt = _db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) {
+    rows.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return rows;
 }
 
 // ── Repo helpers ──────────────────────────────────────────────────────────────
 
+export function getDb() {
+  return _db;
+}
+
 export function addRepo({ owner, name, branch = "main", filePath = "README.md", label }) {
-  const db = getDb();
-  return db
-    .prepare(
-      `INSERT OR IGNORE INTO repos (owner, name, branch, file_path, label)
-       VALUES (@owner, @name, @branch, @filePath, @label)`
-    )
-    .run({ owner, name, branch, filePath, label });
+  return dbRun(
+    `INSERT OR IGNORE INTO repos (owner, name, branch, file_path, label)
+     VALUES (?, ?, ?, ?, ?)`,
+    [owner, name, branch, filePath, label ?? null]
+  );
 }
 
 export function removeRepo(id) {
-  return getDb().prepare("DELETE FROM repos WHERE id = ?").run(id);
+  return dbRun("DELETE FROM repos WHERE id = ?", [id]);
 }
 
 export function toggleRepo(id, enabled) {
-  return getDb().prepare("UPDATE repos SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, id);
+  return dbRun("UPDATE repos SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
 }
 
 export function listRepos() {
-  return getDb().prepare("SELECT * FROM repos ORDER BY added_at DESC").all();
+  return dbAll("SELECT * FROM repos ORDER BY added_at DESC");
 }
 
 export function getRepo(id) {
-  return getDb().prepare("SELECT * FROM repos WHERE id = ?").get(id);
+  return dbGet("SELECT * FROM repos WHERE id = ?", [id]);
 }
 
 export function updateLastSha(id, sha) {
-  return getDb().prepare("UPDATE repos SET last_sha = ? WHERE id = ?").run(sha, id);
+  return dbRun("UPDATE repos SET last_sha = ? WHERE id = ?", [sha, id]);
 }
 
 // ── Seen-job helpers ──────────────────────────────────────────────────────────
 
 export function isJobSeen(repoId, hash) {
-  return !!getDb()
-    .prepare("SELECT 1 FROM seen_jobs WHERE repo_id = ? AND job_hash = ?")
-    .get(repoId, hash);
+  return !!dbGet("SELECT 1 FROM seen_jobs WHERE repo_id = ? AND job_hash = ?", [repoId, hash]);
 }
 
 export function markJobSeen(repoId, hash, { company, role, location, applyUrl }) {
-  return getDb()
-    .prepare(
-      `INSERT OR IGNORE INTO seen_jobs (repo_id, job_hash, company, role, location, apply_url)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(repoId, hash, company, role, location, applyUrl);
+  return dbRun(
+    `INSERT OR IGNORE INTO seen_jobs (repo_id, job_hash, company, role, location, apply_url)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [repoId, hash, company, role, location, applyUrl ?? null]
+  );
 }
 
 export function recentAlerts(limit = 50) {
-  return getDb()
-    .prepare(
-      `SELECT al.*, r.owner, r.name
-       FROM alert_log al
-       LEFT JOIN repos r ON r.id = al.repo_id
-       ORDER BY al.sent_at DESC LIMIT ?`
-    )
-    .all(limit);
+  return dbAll(
+    `SELECT al.*, r.owner, r.name
+     FROM alert_log al
+     LEFT JOIN repos r ON r.id = al.repo_id
+     ORDER BY al.sent_at DESC LIMIT ?`,
+    [limit]
+  );
 }
 
 export function logAlert({ repoId, company, role, smsSid }) {
-  return getDb()
-    .prepare(
-      `INSERT INTO alert_log (repo_id, company, role, sms_sid)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(repoId, company, role, smsSid);
+  return dbRun(
+    `INSERT INTO alert_log (repo_id, company, role, sms_sid) VALUES (?, ?, ?, ?)`,
+    [repoId, company, role, smsSid]
+  );
 }
