@@ -125,6 +125,7 @@ async function pollRepo(repo) {
           if (!alerted) logAlert({ repoId: id, company: job.company, role: job.role, smsSid: null });
           console.log(`  ✅ Discord sent: ${job.company} — ${job.role}`);
           alerted = true;
+          await sleep(750);
         } catch (err) {
           console.error(`  ❌ Discord failed for ${job.company}:`, err.message);
         }

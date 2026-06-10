@@ -3,6 +3,7 @@ export async function sendDiscordAlert(job, repoLabel) {
   if (!url) return null;
 
   const embed = {
+    author: { name: repoLabel },
     title: `${job.company} — ${job.role}`,
     url: job.applyUrl ?? undefined,
     color: 0x5865f2,
@@ -18,16 +19,32 @@ export async function sendDiscordAlert(job, repoLabel) {
     embed.fields.push({ name: "🔗 Apply", value: `[Click here](${job.applyUrl})`, inline: true });
   }
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ embeds: [embed] }),
-  });
+  const body = JSON.stringify({ embeds: [embed] });
 
-  if (!res.ok) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+
+    if (res.ok) return true;
+
+    if (res.status === 429) {
+      const data = await res.json().catch(() => ({}));
+      const retryAfterMs = Math.ceil((data.retry_after ?? 1) * 1000);
+      console.warn(`[discord] Rate limited, retrying in ${retryAfterMs}ms`);
+      await sleep(retryAfterMs);
+      continue;
+    }
+
     const text = await res.text();
     throw new Error(`Discord webhook ${res.status}: ${text}`);
   }
 
-  return true;
+  throw new Error("Discord webhook: gave up after repeated rate limiting");
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }

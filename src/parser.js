@@ -61,8 +61,13 @@ function cleanCell(raw) {
   // Extract URL from markdown link
   const linkMatch = raw.match(/\[.*?\]\((https?:\/\/[^)]+)\)/);
   if (linkMatch) return linkMatch[1];
-  // Strip bold/italic markers and remaining markdown links (text only)
-  return raw.replace(/\*+/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
+  // Strip HTML tags (e.g. "<a href=...><strong>Company</strong></a>"),
+  // bold/italic markers, and remaining markdown links (text only)
+  return raw
+    .replace(/<[^>]+>/g, "")
+    .replace(/\*+/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .trim();
 }
 
 /**
@@ -124,9 +129,10 @@ function parseTableRows(lines, repoSlug) {
     const role = cleanCell(cells[1]) || "Unknown role";
     const location = cells[2] ? cleanCell(cells[2]) : "";
 
-    // Find the apply URL — look for http in any cell
+    // Find the apply URL — look for http in any cell after company/role,
+    // since the company cell may itself contain a link to the company site
     let applyUrl = null;
-    for (const cell of cells) {
+    for (const cell of cells.slice(2)) {
       const url = extractApplyUrl(cell);
       if (url && !url.includes("simplify.jobs/c/")) {
         applyUrl = url;
