@@ -1,20 +1,41 @@
 # 🔔 gh-job-alerts
 
-> Get an SMS on your phone the moment a new job is posted to a GitHub markdown job board.
+> Get notified the instant a new job is posted to a GitHub job-board repo — in Discord or via text message.
 
-Built for repos like:
-- [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships)
-- [speedyapply/2026-SWE-College-Jobs](https://github.com/speedyapply/2026-SWE-College-Jobs)
-- Any repo that maintains a markdown table of job listings
+Watches repos like [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and [speedyapply/2026-SWE-College-Jobs](https://github.com/speedyapply/2026-SWE-College-Jobs) for newly added rows in their job tables, then sends an alert as soon as one shows up.
 
 ---
 
-## How it works
+## Add the bot to your Discord server
+
+The fastest way to use gh-job-alerts — no setup, hosting, or code required.
+
+**[Click here to add the bot to your server](https://discord.com/api/oauth2/authorize?client_id=1515413567346835516&permissions=277025459264&scope=bot%20applications.commands)**
+
+Once it's added, anyone with the **Manage Server** permission can configure it:
+
+| Command | Description |
+|---|---|
+| `/set-channel [channel]` | Choose which channel receives alerts (defaults to the current channel) |
+| `/subscribe repo:<repo> [category]` | Subscribe to a watched repo, optionally filtered to "FAANG+" / "Quant" / "Other" |
+| `/unsubscribe repo:<repo>` | Remove a subscription |
+| `/list-repos` | Show repos available to subscribe to |
+| `/list-subscriptions` | Show this server's current channel + subscriptions |
+
+That's it — new postings matching your subscriptions will start showing up in that channel automatically.
+
+---
+
+## Prefer SMS, or want to run your own instance?
+
+gh-job-alerts can also run as a self-hosted service that texts you directly via Twilio, in addition to (or instead of) Discord. Self-hosting also gives you a web dashboard for managing watched repos and viewing recent alerts, and lets you run your own independent copy of the Discord bot.
+
+### How it works
 
 1. Every N minutes (default: 10), the poller checks GitHub for new commits to your watched repos
 2. It diffs the README to find newly added table rows
 3. New jobs are compared against the database — duplicates are skipped
-4. A text message is sent via Twilio for each genuinely new posting
+4. A text message is sent via Twilio for each genuinely new posting (and/or a Discord alert, if configured)
 
 ```
 GitHub repo updated
@@ -25,17 +46,13 @@ Parse added markdown table rows
        ↓
 Deduplicate against SQLite DB
        ↓
-Twilio → your phone 📱
+Twilio → your phone 📱  /  Discord
 ```
-
----
-
-## Quickstart
 
 ### Prerequisites
 
 - Node.js 18+
-- A [Twilio](https://twilio.com) account (free trial gives ~$15 credit ≈ 1,500 texts)
+- A [Twilio](https://twilio.com) account (free trial gives ~$15 credit ≈ 1,500 texts) — only needed for SMS
 - A [GitHub personal access token](https://github.com/settings/tokens) (no scopes needed for public repos — just raises rate limit from 60 → 5,000 req/hour)
 
 ### 1. Clone & install
@@ -177,9 +194,9 @@ Any repo following a similar `| Company | Role | Location | ... | Apply link |` 
 
 ---
 
-## Multi-server Discord bot (optional)
+## Running your own copy of the Discord bot
 
-In addition to the single-channel `DISCORD_WEBHOOK_URL`, you can run gh-job-alerts as a **Discord bot** that any server can invite and configure independently — each server picks its own repos, category filters, and alert channel.
+The invite link above points at a bot instance that's already running. If you're self-hosting (see above) and want to run your **own** independent copy of the multi-server Discord bot — with its own catalog of repos and its own invite link — you can enable it for your instance:
 
 ### 1. Create the bot
 
@@ -195,27 +212,17 @@ DISCORD_CLIENT_ID=your_application_id_here
 
 5. Start the app (`npm start`). On startup it registers slash commands globally (can take up to an hour to appear the first time). For instant propagation while developing, also set `DISCORD_DEV_GUILD_ID` to a test server's ID — commands registered to a single guild show up immediately.
 
-### 2. Invite the bot to a server
+### 2. Build your own invite link
 
-Build an invite link with the `bot` and `applications.commands` scopes and the permissions to view/send messages and embed links:
+Use the `bot` and `applications.commands` scopes and the permissions to view/send messages and embed links:
 
 ```
 https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=277025459264&scope=bot%20applications.commands
 ```
 
-Any server admin can use this link to add the bot to their server.
-
 ### 3. Configure per-server (slash commands)
 
-All commands require the **Manage Server** permission:
-
-| Command | Description |
-|---|---|
-| `/set-channel [channel]` | Choose which channel receives alerts (defaults to the current channel) |
-| `/subscribe repo:<repo> [category]` | Subscribe this server to a repo from the global catalog, optionally filtered to "FAANG+" / "Quant" / "Other" |
-| `/unsubscribe repo:<repo>` | Remove a subscription |
-| `/list-repos` | Show repos available to subscribe to |
-| `/list-subscriptions` | Show this server's current channel + subscriptions |
+Same `/set-channel`, `/subscribe`, `/unsubscribe`, `/list-repos`, `/list-subscriptions` commands described above — each requires the **Manage Server** permission.
 
 When `pollAll()` finds a new job posting, it's sent to every subscribed server's configured channel in addition to the legacy `DISCORD_WEBHOOK_URL` and SMS alerts (if configured).
 
