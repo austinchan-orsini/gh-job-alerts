@@ -13,11 +13,12 @@
  */
 
 import "dotenv/config";
-import { listRepos, updateLastSha, isJobSeen, markJobSeen, logAlert } from "./db.js";
+import { listRepos, updateLastSha, isJobSeen, markJobSeen, logAlert, listSubscribersForRepo } from "./db.js";
 import { getLatestCommitSha, getFileAtSha } from "./github.js";
 import { extractJobsFromFile, buildCategoryMap } from "./parser.js";
 import { sendJobAlert } from "./sms.js";
 import { sendDiscordAlert } from "./discord.js";
+import { sendGuildJobAlert } from "./discord-bot.js";
 
 const DRY_RUN = process.env.DRY_RUN === "true";
 
@@ -80,9 +81,14 @@ async function pollRepo(repo) {
 
   console.log(`[${repoSlug}] ${newJobs.length} new job row(s) since last poll.`);
 
-  // If this repo is filtered to a specific category (e.g. "FAANG+"),
-  // look up each job's category from the latest README snapshot.
-  const categoryMap = category_filter ? buildCategoryMap(afterContent, repoSlug) : null;
+  // Guilds subscribed to this repo via the Discord bot, each with its own
+  // optional category filter and alert channel.
+  const subscribers = listSubscribersForRepo(id);
+
+  // If this repo (or any subscribed guild) is filtered to a specific category
+  // (e.g. "FAANG+"), look up each job's category from the latest README snapshot.
+  const needsCategoryMap = category_filter || subscribers.some((s) => s.category_filter);
+  const categoryMap = needsCategoryMap ? buildCategoryMap(afterContent, repoSlug) : null;
 
   for (const job of newJobs) {
     if (isJobSeen(id, job.hash)) continue;
@@ -125,6 +131,26 @@ async function pollRepo(repo) {
         await sleep(750);
       } catch (err) {
         console.error(`  ❌ Discord failed for ${job.company}:`, err.message);
+      }
+    }
+
+    // Fan out to guilds subscribed to this repo via the Discord bot.
+    for (const sub of subscribers) {
+      if (sub.category_filter && categoryMap) {
+        const category = categoryMap.get(job.hash);
+        if (category !== sub.category_filter) continue;
+      }
+
+      try {
+        const sent = await sendGuildJobAlert(sub.channel_id, job, repoLabel);
+        if (sent) {
+          if (!alerted) logAlert({ repoId: id, company: job.company, role: job.role, smsSid: null });
+          console.log(`  ✅ Discord (guild ${sub.guild_id}) sent: ${job.company} — ${job.role}`);
+          alerted = true;
+          await sleep(750);
+        }
+      } catch (err) {
+        console.error(`  ❌ Discord (guild ${sub.guild_id}) failed for ${job.company}:`, err.message);
       }
     }
 

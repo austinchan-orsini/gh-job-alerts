@@ -1,7 +1,8 @@
-export async function sendDiscordAlert(job, repoLabel) {
-  const url = process.env.DISCORD_WEBHOOK_URL;
-  if (!url) return null;
-
+/**
+ * Build the embed payload for a new job posting alert. Shared between the
+ * webhook path (sendDiscordAlert) and the bot path (discord-bot.js).
+ */
+export function buildJobEmbed(job, repoLabel) {
   const embed = {
     author: { name: repoLabel },
     title: `${job.company} — ${job.role}`,
@@ -19,7 +20,14 @@ export async function sendDiscordAlert(job, repoLabel) {
     embed.fields.push({ name: "🔗 Apply", value: `[Click here](${job.applyUrl})`, inline: true });
   }
 
-  return postToDiscord({ embeds: [embed] });
+  return embed;
+}
+
+export async function sendDiscordAlert(job, repoLabel) {
+  const url = process.env.DISCORD_WEBHOOK_URL;
+  if (!url) return null;
+
+  return postToDiscord({ embeds: [buildJobEmbed(job, repoLabel)] });
 }
 
 /**

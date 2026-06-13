@@ -64,6 +64,25 @@ _db.run(`
   )
 `);
 
+_db.run(`
+  CREATE TABLE IF NOT EXISTS guild_settings (
+    guild_id    TEXT PRIMARY KEY,
+    channel_id  TEXT,
+    added_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+_db.run(`
+  CREATE TABLE IF NOT EXISTS guild_subscriptions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id        TEXT NOT NULL,
+    repo_id         INTEGER NOT NULL,
+    category_filter TEXT,
+    added_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(guild_id, repo_id)
+  )
+`);
+
 save();
 
 function save() {
@@ -115,6 +134,7 @@ export function setCategoryFilter(id, categoryFilter) {
 }
 
 export function removeRepo(id) {
+  dbRun("DELETE FROM guild_subscriptions WHERE repo_id = ?", [id]);
   return dbRun("DELETE FROM repos WHERE id = ?", [id]);
 }
 
@@ -170,5 +190,64 @@ export function logAlert({ repoId, company, role, smsSid }) {
   return dbRun(
     `INSERT INTO alert_log (repo_id, company, role, sms_sid) VALUES (?, ?, ?, ?)`,
     [repoId, company, role, smsSid]
+  );
+}
+
+// ── Discord guild helpers ───────────────────────────────────────────────────
+
+export function upsertGuildChannel(guildId, channelId) {
+  return dbRun(
+    `INSERT INTO guild_settings (guild_id, channel_id) VALUES (?, ?)
+     ON CONFLICT(guild_id) DO UPDATE SET channel_id = excluded.channel_id`,
+    [guildId, channelId]
+  );
+}
+
+export function getGuildSettings(guildId) {
+  return dbGet("SELECT * FROM guild_settings WHERE guild_id = ?", [guildId]);
+}
+
+export function removeGuild(guildId) {
+  dbRun("DELETE FROM guild_subscriptions WHERE guild_id = ?", [guildId]);
+  return dbRun("DELETE FROM guild_settings WHERE guild_id = ?", [guildId]);
+}
+
+export function addGuildSubscription(guildId, repoId, categoryFilter = null) {
+  return dbRun(
+    `INSERT INTO guild_subscriptions (guild_id, repo_id, category_filter) VALUES (?, ?, ?)
+     ON CONFLICT(guild_id, repo_id) DO UPDATE SET category_filter = excluded.category_filter`,
+    [guildId, repoId, categoryFilter]
+  );
+}
+
+export function removeGuildSubscription(guildId, repoId) {
+  return dbRun("DELETE FROM guild_subscriptions WHERE guild_id = ? AND repo_id = ?", [guildId, repoId]);
+}
+
+export function setGuildSubscriptionCategory(guildId, repoId, categoryFilter) {
+  return dbRun(
+    "UPDATE guild_subscriptions SET category_filter = ? WHERE guild_id = ? AND repo_id = ?",
+    [categoryFilter ?? null, guildId, repoId]
+  );
+}
+
+export function listGuildSubscriptions(guildId) {
+  return dbAll(
+    `SELECT gs.*, r.owner, r.name, r.label
+     FROM guild_subscriptions gs
+     JOIN repos r ON r.id = gs.repo_id
+     WHERE gs.guild_id = ?
+     ORDER BY r.owner, r.name`,
+    [guildId]
+  );
+}
+
+export function listSubscribersForRepo(repoId) {
+  return dbAll(
+    `SELECT gs.guild_id, gs.category_filter, g.channel_id
+     FROM guild_subscriptions gs
+     JOIN guild_settings g ON g.guild_id = gs.guild_id
+     WHERE gs.repo_id = ? AND g.channel_id IS NOT NULL`,
+    [repoId]
   );
 }
