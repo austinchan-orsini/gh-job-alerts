@@ -41,6 +41,35 @@ export async function sendJobAlert(job, repoLabel) {
 }
 
 /**
+ * Send a daily summary SMS listing each repo and whether new postings
+ * were found in the last 24h.
+ *
+ * @param {Array<{label: string, count: number}>} summary
+ * @returns {string} Twilio message SID
+ */
+export async function sendDigestSms(summary) {
+  const { TWILIO_FROM_NUMBER, TWILIO_TO_NUMBER } = process.env;
+  if (!TWILIO_FROM_NUMBER || !TWILIO_TO_NUMBER) {
+    throw new Error("TWILIO_FROM_NUMBER and TWILIO_TO_NUMBER must be set in .env");
+  }
+
+  const lines = summary.map((s) =>
+    s.count > 0 ? `${s.label}: ${s.count} new` : `${s.label}: no new postings`
+  );
+
+  let body = ["📋 Daily summary", ...lines].join("\n");
+  if (body.length > 320) body = body.slice(0, 317) + "...";
+
+  const message = await getClient().messages.create({
+    body,
+    from: TWILIO_FROM_NUMBER,
+    to: TWILIO_TO_NUMBER,
+  });
+
+  return message.sid;
+}
+
+/**
  * Format the SMS body. Kept short so it fits in 1 SMS segment (≤160 chars).
  */
 function formatSms(job, repoLabel) {

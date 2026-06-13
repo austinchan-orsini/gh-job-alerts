@@ -12,7 +12,7 @@
 
 import "dotenv/config";
 import { mkdirSync } from "fs";
-import { addRepo, listRepos } from "../src/db.js";
+import { addRepo, listRepos, setCategoryFilter } from "../src/db.js";
 
 mkdirSync("data", { recursive: true });
 
@@ -29,12 +29,7 @@ const REPOS = [
     branch: "main",
     filePath: "README.md",
     label: "SpeedyApply SWE",
-  },
-  {
-    url: "https://github.com/vanshb03/Summer2026-Internships",
-    branch: "dev",
-    filePath: "README.md",
-    label: "vanshb03",
+    categoryFilter: "FAANG+",
   },
 ];
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +51,10 @@ for (const repo of REPOS) {
   });
   if (result.changes > 0) {
     console.log(`✅ Added: ${owner}/${name} (${repo.label})`);
+    if (repo.categoryFilter) {
+      const added = listRepos().find((r) => r.owner === owner && r.name === name);
+      if (added) setCategoryFilter(added.id, repo.categoryFilter);
+    }
   } else {
     console.log(`⚠️  Already exists: ${owner}/${name}`);
   }

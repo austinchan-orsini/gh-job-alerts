@@ -13,9 +13,10 @@
  */
 
 import express from "express";
-import { listRepos, addRepo, removeRepo, toggleRepo, recentAlerts } from "./db.js";
+import { listRepos, addRepo, removeRepo, toggleRepo, recentAlerts, setCategoryFilter } from "./db.js";
 import { getRateLimit } from "./github.js";
 import { pollAll, lastPollSummary } from "./poller.js";
+import { runDailyDigest } from "./digest.js";
 import { sendJobAlert } from "./sms.js";
 import { sendDiscordAlert } from "./discord.js";
 
@@ -51,6 +52,13 @@ export function createServer() {
     res.redirect("/?msg=Repo+added+%E2%9C%93");
   });
 
+  // ── Set category filter ─────────────────────────────────────────────────────
+  app.post("/repos/:id/category", (req, res) => {
+    const { category_filter } = req.body;
+    setCategoryFilter(Number(req.params.id), category_filter || null);
+    res.redirect("/?msg=Category+filter+updated");
+  });
+
   // ── Toggle repo ─────────────────────────────────────────────────────────────
   app.post("/repos/:id/toggle", (req, res) => {
     const repo = listRepos().find((r) => r.id === Number(req.params.id));
@@ -68,6 +76,16 @@ export function createServer() {
   app.post("/poll", async (req, res) => {
     res.redirect("/?msg=Polling+started…");
     pollAll().catch(console.error);
+  });
+
+  // ── Send daily digest now ──────────────────────────────────────────────────
+  app.post("/digest", async (req, res) => {
+    try {
+      await runDailyDigest();
+      res.redirect("/?msg=Daily+digest+sent+%E2%9C%93");
+    } catch (err) {
+      res.redirect("/?msg=Digest+failed:+" + encodeURIComponent(err.message));
+    }
   });
 
   // ── Test Discord ─────────────────────────────────────────────────────────────
@@ -133,6 +151,11 @@ function escapeHtml(str) {
 }
 
 function renderDashboard(repos, alerts, msg, pollSummary) {
+  const categoryOptions = (current) =>
+    ["", "FAANG+", "Quant", "Other"]
+      .map((c) => `<option value="${c}" ${c === (current ?? "") ? "selected" : ""}>${c || "All categories"}</option>`)
+      .join("");
+
   const repoRows = repos.length
     ? repos
         .map(
@@ -140,6 +163,11 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
         <tr class="${r.enabled ? "" : "disabled"}">
           <td><strong>${r.label || r.name}</strong><br><small>${r.owner}/${r.name} @ ${r.branch} / ${r.file_path}</small></td>
           <td>${r.last_sha ? `<code>${r.last_sha.slice(0, 7)}</code>` : "<em>pending</em>"}</td>
+          <td>
+            <form method="POST" action="/repos/${r.id}/category">
+              <select name="category_filter" onchange="this.form.submit()">${categoryOptions(r.category_filter)}</select>
+            </form>
+          </td>
           <td>${r.added_at.slice(0, 10)}</td>
           <td class="actions">
             <form method="POST" action="/repos/${r.id}/toggle">
@@ -152,7 +180,7 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
         </tr>`
         )
         .join("")
-    : `<tr><td colspan="4" style="text-align:center;color:#888">No repos added yet</td></tr>`;
+    : `<tr><td colspan="5" style="text-align:center;color:#888">No repos added yet</td></tr>`;
 
   const alertRows = alerts.length
     ? alerts
@@ -211,6 +239,7 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
     .form-group { display: flex; flex-direction: column; gap: .25rem; }
     label { font-size: .8rem; font-weight: 600; color: #555; }
     input[type=text], input[type=url] { border: 1px solid #ddd; border-radius: 5px; padding: .4rem .7rem; font-size: .875rem; min-width: 220px; }
+    select { border: 1px solid #ddd; border-radius: 5px; padding: .3rem .5rem; font-size: .8rem; }
     .poll-form { margin-top: .5rem; }
   </style>
 </head>
@@ -226,7 +255,7 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
   <div class="card">
     <h2>Watched repos</h2>
     <table>
-      <thead><tr><th>Repo</th><th>Last SHA</th><th>Added</th><th></th></tr></thead>
+      <thead><tr><th>Repo</th><th>Last SHA</th><th>Category filter</th><th>Added</th><th></th></tr></thead>
       <tbody>${repoRows}</tbody>
     </table>
 
@@ -259,6 +288,9 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
     <div class="poll-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
       <form method="POST" action="/poll">
         <button type="submit" class="btn-ok">▶ Poll now</button>
+      </form>
+      <form method="POST" action="/digest">
+        <button type="submit" class="btn-primary">📋 Send daily digest now</button>
       </form>
       <form method="POST" action="/test-sms">
         <button type="submit" class="btn-warn">📱 Send test SMS</button>

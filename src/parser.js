@@ -1,15 +1,29 @@
 /**
- * parser.js — extract new job rows from a GitHub commit patch or from
- * a full README diff between two SHAs.
+ * parser.js — extract job rows from a full README snapshot.
  *
- * Both repo families (SimplifyJobs & speedyapply) use standard GFM tables:
+ * Two table formats are supported:
  *
- *   | Company | Role | Location | ... | Apply | Age |
- *   |---|---|---|...|:---:|:---:|
- *   | **Acme** | SWE Intern | NYC | ... | [Apply](https://...) | 1d |
+ *  - GFM pipe tables (speedyapply, vanshb03):
  *
- * We look for lines added in the patch (lines starting with "+") that look
- * like table rows (start with "|") and are NOT the header or separator rows.
+ *      | Company | Role | Location | ... | Apply | Age |
+ *      |---|---|---|...|:---:|:---:|
+ *      | **Acme** | SWE Intern | NYC | ... | [Apply](https://...) | 1d |
+ *
+ *  - Raw HTML tables (SimplifyJobs), one tag per line:
+ *
+ *      <tr>
+ *      <td><strong><a href="...">Acme</a></strong></td>
+ *      <td>SWE Intern</td>
+ *      <td>NYC</td>
+ *      <td><div align="center"><a href="...">...</a></div></td>
+ *      <td>1d</td>
+ *      </tr>
+ *
+ * New postings are found by diffing the set of job hashes between the
+ * README at the previous poll's commit and the README at the latest commit
+ * (rather than diffing line-by-line patches, which can't be reliably
+ * realigned into table rows when git's diff matches up repeated lines like
+ * "<tr>" / "</tr>" across row boundaries).
  */
 
 import crypto from "crypto";
@@ -83,31 +97,112 @@ function extractApplyUrl(raw) {
 }
 
 /**
- * Given a patch string (from GitHub API), return an array of parsed job objects
- * for every added table row.
+ * Parse every job row out of a full README snapshot, in both GFM pipe-table
+ * and raw HTML <tr>/<td> formats.
  *
- * @param {string} patch  The "patch" field from a GitHub commit's file diff
+ * @param {string} content  Full README text
  * @param {string} repoSlug  e.g. "SimplifyJobs/Summer2026-Internships"
  */
-export function extractJobsFromPatch(patch, repoSlug) {
-  if (!patch) return [];
-
-  const addedLines = patch
-    .split("\n")
-    .filter((l) => l.startsWith("+") && !l.startsWith("+++"))
-    .map((l) => l.slice(1)); // strip the leading "+"
-
-  return parseTableRows(addedLines, repoSlug);
+export function extractJobsFromFile(content, repoSlug) {
+  const lines = content.split("\n");
+  return [...parseTableRows(lines, repoSlug), ...parseHtmlTableRows(lines, repoSlug)];
 }
 
 /**
- * Given two full README strings (before and after), diff them and return
- * newly added table rows.
+ * Build a map of job hash → category ("FAANG+", "Quant", "Other", ...) by
+ * scanning a full README for the speedyapply-style HTML comment markers:
+ *
+ *   <!-- TABLE_FAANG_START --> ... <!-- TABLE_FAANG_END -->
+ *   <!-- TABLE_QUANT_START --> ... <!-- TABLE_QUANT_END -->
+ *   <!-- TABLE_START -->       ... <!-- TABLE_END -->        (Other)
+ *
+ * Rows in files without these markers map to no entry (category unknown).
  */
-export function extractJobsFromFullDiff(before, after, repoSlug) {
-  const beforeLines = new Set(before.split("\n"));
-  const addedLines = after.split("\n").filter((l) => !beforeLines.has(l));
-  return parseTableRows(addedLines, repoSlug);
+export function buildCategoryMap(content, repoSlug) {
+  const map = new Map();
+  let category = null;
+
+  const CATEGORY_NAMES = { FAANG: "FAANG+", QUANT: "Quant" };
+
+  for (const rawLine of content.split("\n")) {
+    const trimmed = rawLine.trim();
+
+    const startMatch = trimmed.match(/<!--\s*TABLE(?:_(\w+))?_START\s*-->/);
+    if (startMatch) {
+      const tag = startMatch[1];
+      category = tag ? (CATEGORY_NAMES[tag] ?? tag) : "Other";
+      continue;
+    }
+    if (/<!--\s*TABLE(?:_\w+)?_END\s*-->/.test(trimmed)) {
+      category = null;
+      continue;
+    }
+
+    if (!trimmed.startsWith("|")) continue;
+    if (isSeparator(trimmed)) continue;
+    if (isHeader(trimmed)) continue;
+
+    const cells = splitRow(trimmed);
+    if (cells.length < 2) continue;
+
+    const company = cleanCell(cells[0]) || "Unknown company";
+    const role = cleanCell(cells[1]) || "Unknown role";
+    const location = cells[2] ? cleanCell(cells[2]) : "";
+
+    if (company.startsWith("---") || company.startsWith("#")) continue;
+    if (company.length < 2) continue;
+
+    const hash = crypto
+      .createHash("sha1")
+      .update(`${repoSlug}:${company}:${role}:${location}`)
+      .digest("hex")
+      .slice(0, 16);
+
+    map.set(hash, category);
+  }
+
+  return map;
+}
+
+/**
+ * Build a job object from an ordered array of cell strings (raw, possibly
+ * containing markdown or HTML). Returns null if the row should be skipped
+ * (section headers, dividers, empty rows, etc).
+ *
+ * Column mapping is the same heuristic across all repo families:
+ *   Company | Role/Position | Location | ... | Apply | Age
+ */
+function buildJob(cells, repoSlug) {
+  if (cells.length < 2) return null;
+
+  const company = cleanCell(cells[0]) || "Unknown company";
+  const role = cleanCell(cells[1]) || "Unknown role";
+  const location = cells[2] ? cleanCell(cells[2]) : "";
+
+  // Find the apply URL — look for http in any cell after company/role,
+  // since the company cell may itself contain a link to the company site
+  let applyUrl = null;
+  for (const cell of cells.slice(2)) {
+    const url = extractApplyUrl(cell);
+    if (url && !url.includes("simplify.jobs/c/") && !url.includes("simplify.jobs/p/")) {
+      applyUrl = url;
+      break;
+    }
+    if (url) applyUrl = applyUrl ?? url; // fallback to Simplify URL
+  }
+
+  // Skip rows that look like section headers or dividers
+  if (company.startsWith("---") || company.startsWith("#")) return null;
+  // Skip clearly empty or emoji-only company names
+  if (company.length < 2) return null;
+
+  const hash = crypto
+    .createHash("sha1")
+    .update(`${repoSlug}:${company}:${role}:${location}`)
+    .digest("hex")
+    .slice(0, 16);
+
+  return { company, role, location, applyUrl, hash };
 }
 
 function parseTableRows(lines, repoSlug) {
@@ -120,39 +215,43 @@ function parseTableRows(lines, repoSlug) {
     if (isHeader(trimmed)) continue;
 
     const cells = splitRow(trimmed);
-    if (cells.length < 2) continue;
+    const job = buildJob(cells, repoSlug);
+    if (job) jobs.push(job);
+  }
 
-    // Heuristic column mapping — works for both repo families:
-    //   SimplifyJobs:  Company | Role | Location | Application | Age
-    //   speedyapply:   Company | Position | Location | Salary | Posting | Age
-    const company = cleanCell(cells[0]) || "Unknown company";
-    const role = cleanCell(cells[1]) || "Unknown role";
-    const location = cells[2] ? cleanCell(cells[2]) : "";
+  return jobs;
+}
 
-    // Find the apply URL — look for http in any cell after company/role,
-    // since the company cell may itself contain a link to the company site
-    let applyUrl = null;
-    for (const cell of cells.slice(2)) {
-      const url = extractApplyUrl(cell);
-      if (url && !url.includes("simplify.jobs/c/")) {
-        applyUrl = url;
-        break;
-      }
-      if (url) applyUrl = applyUrl ?? url; // fallback to Simplify URL
+/**
+ * Parse HTML <tr>/<td> table rows from a list of lines (one tag per line,
+ * as used by SimplifyJobs-style repos). Rows with fewer than 2 <td> cells
+ * (e.g. <thead> rows made of <th>) are ignored.
+ */
+function parseHtmlTableRows(lines, repoSlug) {
+  const jobs = [];
+  let cells = null; // null = not inside a <tr>...</tr>
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed === "<tr>") {
+      cells = [];
+      continue;
     }
 
-    // Skip rows that look like section headers or dividers
-    if (company.startsWith("---") || company.startsWith("#")) continue;
-    // Skip clearly empty or emoji-only company names
-    if (company.length < 2) continue;
+    if (trimmed === "</tr>") {
+      if (cells) {
+        const job = buildJob(cells, repoSlug);
+        if (job) jobs.push(job);
+      }
+      cells = null;
+      continue;
+    }
 
-    const hash = crypto
-      .createHash("sha1")
-      .update(`${repoSlug}:${company}:${role}:${location}`)
-      .digest("hex")
-      .slice(0, 16);
+    if (cells === null) continue;
 
-    jobs.push({ company, role, location, applyUrl, hash });
+    const cellMatch = trimmed.match(/^<td[^>]*>([\s\S]*)<\/td>$/);
+    if (cellMatch) cells.push(cellMatch[1]);
   }
 
   return jobs;

@@ -19,7 +19,40 @@ export async function sendDiscordAlert(job, repoLabel) {
     embed.fields.push({ name: "🔗 Apply", value: `[Click here](${job.applyUrl})`, inline: true });
   }
 
-  const body = JSON.stringify({ embeds: [embed] });
+  return postToDiscord({ embeds: [embed] });
+}
+
+/**
+ * Send a daily summary embed listing each repo and whether new postings
+ * were found in the last 24h.
+ *
+ * @param {Array<{label: string, count: number}>} summary
+ */
+export async function sendDiscordDigest(summary) {
+  const url = process.env.DISCORD_WEBHOOK_URL;
+  if (!url) return null;
+
+  const lines = summary.map((s) =>
+    s.count > 0
+      ? `**${s.label}**: ${s.count} new posting(s) in the last 24h`
+      : `**${s.label}**: No new postings found`
+  );
+
+  const embed = {
+    title: "📋 Daily job alert summary",
+    description: lines.join("\n") || "No repos configured.",
+    color: 0x5865f2,
+    timestamp: new Date().toISOString(),
+  };
+
+  return postToDiscord({ embeds: [embed] });
+}
+
+async function postToDiscord(payload) {
+  const url = process.env.DISCORD_WEBHOOK_URL;
+  if (!url) return null;
+
+  const body = JSON.stringify(payload);
 
   for (let attempt = 0; attempt < 5; attempt++) {
     const res = await fetch(url, {

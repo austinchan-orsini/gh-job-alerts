@@ -45,40 +45,6 @@ export async function getFileAtSha(owner, repo, filePath, sha) {
 }
 
 /**
- * Get the commit diff patch for a specific commit SHA.
- * Returns the patch string for the given filePath, or null if not in the diff.
- */
-export async function getCommitPatch(owner, repo, sha, filePath) {
-  const data = await ghFetch(`/repos/${owner}/${repo}/commits/${sha}`);
-  const file = data.files?.find((f) => f.filename === filePath);
-  return file?.patch ?? null;
-}
-
-/**
- * Get commits on a branch for a specific file since a known SHA (exclusive).
- * Returns newest-first. If previousSha is null, returns the latest commit only.
- */
-export async function getNewCommits(owner, repo, branch, filePath, previousSha) {
-  const commits = await ghFetch(
-    `/repos/${owner}/${repo}/commits?sha=${branch}&path=${filePath}&per_page=20`
-  );
-
-  if (!previousSha) {
-    // First run — treat latest commit as the baseline, don't alert on anything
-    return { newCommits: [], latestSha: commits[0]?.sha ?? null, firstRun: true };
-  }
-
-  const cutoff = commits.findIndex((c) => c.sha === previousSha);
-  const newCommits = cutoff === -1 ? commits : commits.slice(0, cutoff);
-
-  return {
-    newCommits: newCommits.reverse(), // oldest first so we process in order
-    latestSha: commits[0]?.sha ?? previousSha,
-    firstRun: false,
-  };
-}
-
-/**
  * Parse rate limit info from the API headers (for logging / health endpoint).
  */
 export async function getRateLimit() {

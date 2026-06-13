@@ -10,9 +10,11 @@ import "dotenv/config";
 import cron from "node-cron";
 import { createServer } from "./server.js";
 import { pollAll } from "./poller.js";
+import { runDailyDigest } from "./digest.js";
 
 const PORT = process.env.PORT || 3000;
 const POLL_CRON = process.env.POLL_CRON || "*/10 * * * *";
+const DIGEST_CRON = process.env.DIGEST_CRON || "0 13 * * *";
 
 // ── Web server ────────────────────────────────────────────────────────────────
 const app = createServer();
@@ -31,6 +33,18 @@ cron.schedule(POLL_CRON, () => {
 });
 
 console.log(`[cron] Polling on schedule: ${POLL_CRON}`);
+
+// ── Daily digest scheduler ───────────────────────────────────────────────────
+if (!cron.validate(DIGEST_CRON)) {
+  console.error(`[digest] Invalid DIGEST_CRON expression: "${DIGEST_CRON}". Using default.`);
+}
+
+cron.schedule(DIGEST_CRON, () => {
+  console.log(`[digest] Triggered at ${new Date().toISOString()}`);
+  runDailyDigest().catch(console.error);
+});
+
+console.log(`[digest] Daily summary on schedule: ${DIGEST_CRON}`);
 
 // ── Run one immediate poll on startup ─────────────────────────────────────────
 console.log("[startup] Running initial poll…");

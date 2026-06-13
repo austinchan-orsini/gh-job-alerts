@@ -1,9 +1,12 @@
 /**
  * poller.js — the heart of gh-job-alerts.
  *
- * Checks every enabled repo in the database for new commits, parses
- * added markdown table rows, deduplicates against seen_jobs, and sends
- * an SMS for each genuinely new posting.
+ * Checks every enabled repo in the database for new commits. If the file
+ * has changed, fetches the README at the previous and latest commit,
+ * extracts every job row from each, and treats any job hash present in
+ * the latest snapshot but not the previous one as a new posting.
+ * Deduplicates against seen_jobs and sends an SMS/Discord alert for each
+ * genuinely new posting.
  *
  * Can be run standalone ("node src/poller.js") or imported by index.js
  * and called on a cron schedule.
@@ -11,8 +14,8 @@
 
 import "dotenv/config";
 import { listRepos, updateLastSha, isJobSeen, markJobSeen, logAlert } from "./db.js";
-import { getNewCommits, getCommitPatch, getFileAtSha } from "./github.js";
-import { extractJobsFromPatch, extractJobsFromFullDiff } from "./parser.js";
+import { getLatestCommitSha, getFileAtSha } from "./github.js";
+import { extractJobsFromFile, buildCategoryMap } from "./parser.js";
 import { sendJobAlert } from "./sms.js";
 import { sendDiscordAlert } from "./discord.js";
 
@@ -43,101 +46,93 @@ export async function pollAll() {
 }
 
 async function pollRepo(repo) {
-  const { id, owner, name, branch, file_path, last_sha, label } = repo;
+  const { id, owner, name, branch, file_path, last_sha, label, category_filter } = repo;
   const repoSlug = `${owner}/${name}`;
   const repoLabel = label || name;
   let totalAlerts = 0;
 
-  const { newCommits, latestSha, firstRun } = await getNewCommits(
-    owner,
-    name,
-    branch,
-    file_path,
-    last_sha
-  );
+  const latestSha = await getLatestCommitSha(owner, name, branch, file_path);
 
-  if (firstRun) {
-    console.log(`[${repoSlug}] First run — recording baseline SHA ${latestSha?.slice(0, 7)}`);
-    if (latestSha) updateLastSha(id, latestSha);
+  if (!latestSha) {
+    console.log(`[${repoSlug}] Could not find ${file_path} on ${branch}.`);
     return 0;
   }
 
-  if (newCommits.length === 0) {
+  if (!last_sha) {
+    console.log(`[${repoSlug}] First run — recording baseline SHA ${latestSha.slice(0, 7)}`);
+    updateLastSha(id, latestSha);
+    return 0;
+  }
+
+  if (latestSha === last_sha) {
     console.log(`[${repoSlug}] No new commits.`);
     return 0;
   }
 
-  console.log(`[${repoSlug}] ${newCommits.length} new commit(s) to process.`);
+  const [beforeContent, afterContent] = await Promise.all([
+    getFileAtSha(owner, name, file_path, last_sha).catch(() => ""),
+    getFileAtSha(owner, name, file_path, latestSha),
+  ]);
 
-  for (const commit of newCommits) {
-    const sha = commit.sha;
-    console.log(`  → commit ${sha.slice(0, 7)}`);
+  const beforeHashes = new Set(extractJobsFromFile(beforeContent, repoSlug).map((j) => j.hash));
+  const afterJobs = extractJobsFromFile(afterContent, repoSlug);
+  const newJobs = afterJobs.filter((j) => !beforeHashes.has(j.hash));
 
-    // Try patch first (faster) — fall back to full file diff if patch is null
-    let jobs;
-    const patch = await getCommitPatch(owner, name, sha, file_path);
+  console.log(`[${repoSlug}] ${newJobs.length} new job row(s) since last poll.`);
 
-    if (patch) {
-      jobs = extractJobsFromPatch(patch, repoSlug);
-    } else {
-      // No patch means the file was added fresh or is too large — diff manually
-      const parentSha = commit.parents?.[0]?.sha;
-      if (!parentSha) {
-        jobs = [];
-      } else {
-        const [before, after] = await Promise.all([
-          getFileAtSha(owner, name, file_path, parentSha).catch(() => ""),
-          getFileAtSha(owner, name, file_path, sha).catch(() => ""),
-        ]);
-        jobs = extractJobsFromFullDiff(before, after, repoSlug);
-      }
-    }
+  // If this repo is filtered to a specific category (e.g. "FAANG+"),
+  // look up each job's category from the latest README snapshot.
+  const categoryMap = category_filter ? buildCategoryMap(afterContent, repoSlug) : null;
 
-    console.log(`     ${jobs.length} job row(s) added in this commit`);
+  for (const job of newJobs) {
+    if (isJobSeen(id, job.hash)) continue;
 
-    for (const job of jobs) {
-      if (isJobSeen(id, job.hash)) continue;
+    markJobSeen(id, job.hash, job);
 
-      markJobSeen(id, job.hash, job);
-
-      if (DRY_RUN) {
-        console.log(`  [DRY RUN] Would alert: ${job.company} — ${job.role}`);
+    if (category_filter && categoryMap) {
+      const category = categoryMap.get(job.hash);
+      if (category !== category_filter) {
+        console.log(`  (skipped, category "${category ?? "unknown"}" != "${category_filter}"): ${job.company} — ${job.role}`);
         continue;
       }
-
-      let alerted = false;
-
-      if (process.env.TWILIO_ACCOUNT_SID) {
-        try {
-          const smsSid = await sendJobAlert(job, repoLabel);
-          logAlert({ repoId: id, company: job.company, role: job.role, smsSid });
-          console.log(`  ✅ SMS sent: ${job.company} — ${job.role}`);
-          alerted = true;
-          await sleep(500);
-        } catch (err) {
-          console.error(`  ❌ SMS failed for ${job.company}:`, err.message);
-        }
-      }
-
-      if (process.env.DISCORD_WEBHOOK_URL) {
-        try {
-          await sendDiscordAlert(job, repoLabel);
-          if (!alerted) logAlert({ repoId: id, company: job.company, role: job.role, smsSid: null });
-          console.log(`  ✅ Discord sent: ${job.company} — ${job.role}`);
-          alerted = true;
-          await sleep(750);
-        } catch (err) {
-          console.error(`  ❌ Discord failed for ${job.company}:`, err.message);
-        }
-      }
-
-      if (alerted) totalAlerts++;
     }
+
+    if (DRY_RUN) {
+      console.log(`  [DRY RUN] Would alert: ${job.company} — ${job.role}`);
+      continue;
+    }
+
+    let alerted = false;
+
+    if (process.env.TWILIO_ACCOUNT_SID) {
+      try {
+        const smsSid = await sendJobAlert(job, repoLabel);
+        logAlert({ repoId: id, company: job.company, role: job.role, smsSid });
+        console.log(`  ✅ SMS sent: ${job.company} — ${job.role}`);
+        alerted = true;
+        await sleep(500);
+      } catch (err) {
+        console.error(`  ❌ SMS failed for ${job.company}:`, err.message);
+      }
+    }
+
+    if (process.env.DISCORD_WEBHOOK_URL) {
+      try {
+        await sendDiscordAlert(job, repoLabel);
+        if (!alerted) logAlert({ repoId: id, company: job.company, role: job.role, smsSid: null });
+        console.log(`  ✅ Discord sent: ${job.company} — ${job.role}`);
+        alerted = true;
+        await sleep(750);
+      } catch (err) {
+        console.error(`  ❌ Discord failed for ${job.company}:`, err.message);
+      }
+    }
+
+    if (alerted) totalAlerts++;
   }
 
-  // Update baseline to latest processed commit
   updateLastSha(id, latestSha);
-  console.log(`[${repoSlug}] Sent ${totalAlerts} alert(s). SHA → ${latestSha?.slice(0, 7)}`);
+  console.log(`[${repoSlug}] Sent ${totalAlerts} alert(s). SHA → ${latestSha.slice(0, 7)}`);
   return totalAlerts;
 }
 

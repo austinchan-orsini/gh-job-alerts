@@ -31,6 +31,14 @@ _db.run(`
   )
 `);
 
+// Migration: add category_filter column to older databases
+{
+  const repoCols = dbAll("PRAGMA table_info(repos)").map((c) => c.name);
+  if (!repoCols.includes("category_filter")) {
+    _db.run("ALTER TABLE repos ADD COLUMN category_filter TEXT");
+  }
+}
+
 _db.run(`
   CREATE TABLE IF NOT EXISTS seen_jobs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +110,10 @@ export function addRepo({ owner, name, branch = "main", filePath = "README.md", 
   );
 }
 
+export function setCategoryFilter(id, categoryFilter) {
+  return dbRun("UPDATE repos SET category_filter = ? WHERE id = ?", [categoryFilter ?? null, id]);
+}
+
 export function removeRepo(id) {
   return dbRun("DELETE FROM repos WHERE id = ?", [id]);
 }
@@ -144,6 +156,14 @@ export function recentAlerts(limit = 50) {
      ORDER BY al.sent_at DESC LIMIT ?`,
     [limit]
   );
+}
+
+export function countAlertsSince(repoId, sinceIso) {
+  const row = dbGet(
+    `SELECT COUNT(*) as cnt FROM alert_log WHERE repo_id = ? AND sent_at >= ?`,
+    [repoId, sinceIso]
+  );
+  return row?.cnt ?? 0;
 }
 
 export function logAlert({ repoId, company, role, smsSid }) {
