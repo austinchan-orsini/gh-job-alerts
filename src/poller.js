@@ -93,15 +93,16 @@ async function pollRepo(repo) {
   for (const job of newJobs) {
     if (isJobSeen(id, job.hash)) continue;
 
-    markJobSeen(id, job.hash, job);
-
     if (category_filter && categoryMap) {
       const category = categoryMap.get(job.hash);
       if (category !== category_filter) {
         console.log(`  (skipped, category "${category ?? "unknown"}" != "${category_filter}"): ${job.company} — ${job.role}`);
+        markJobSeen(id, job.hash, job);
         continue;
       }
     }
+
+    markJobSeen(id, job.hash, job);
 
     if (DRY_RUN) {
       console.log(`  [DRY RUN] Would alert: ${job.company} — ${job.role}`);
@@ -136,7 +137,11 @@ async function pollRepo(repo) {
 
     // Fan out to guilds subscribed to this repo via the Discord bot.
     for (const sub of subscribers) {
-      if (sub.category_filter && categoryMap) {
+      // Only apply the per-guild category filter when this repo actually uses
+      // category markers (i.e. the map is non-empty). An empty map means the
+      // repo has no markers and every job's category is unknown — filtering
+      // against that would silently drop everything.
+      if (sub.category_filter && categoryMap?.size > 0) {
         const category = categoryMap.get(job.hash);
         if (category !== sub.category_filter) continue;
       }
