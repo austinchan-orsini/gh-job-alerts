@@ -61,7 +61,7 @@ async function pollRepo(repo) {
 
   if (!last_sha) {
     console.log(`[${repoSlug}] First run — recording baseline SHA ${latestSha.slice(0, 7)}`);
-    updateLastSha(id, latestSha);
+    if (!DRY_RUN) updateLastSha(id, latestSha);
     return 0;
   }
 
@@ -97,17 +97,17 @@ async function pollRepo(repo) {
       const category = categoryMap.get(job.hash);
       if (category !== category_filter) {
         console.log(`  (skipped, category "${category ?? "unknown"}" != "${category_filter}"): ${job.company} — ${job.role}`);
-        markJobSeen(id, job.hash, job);
+        if (!DRY_RUN) markJobSeen(id, job.hash, job);
         continue;
       }
     }
-
-    markJobSeen(id, job.hash, job);
 
     if (DRY_RUN) {
       console.log(`  [DRY RUN] Would alert: ${job.company} — ${job.role}`);
       continue;
     }
+
+    markJobSeen(id, job.hash, job);
 
     let alerted = false;
 
@@ -162,7 +162,7 @@ async function pollRepo(repo) {
     if (alerted) totalAlerts++;
   }
 
-  updateLastSha(id, latestSha);
+  if (!DRY_RUN) updateLastSha(id, latestSha);
   console.log(`[${repoSlug}] Sent ${totalAlerts} alert(s). SHA → ${latestSha.slice(0, 7)}`);
   return totalAlerts;
 }
