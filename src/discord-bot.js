@@ -96,13 +96,8 @@ async function registerCommands() {
   }
 
   const rest = new REST({ version: "10" }).setToken(token);
-  const devGuildId = process.env.DISCORD_DEV_GUILD_ID;
-  const route = devGuildId
-    ? Routes.applicationGuildCommands(clientId, devGuildId)
-    : Routes.applicationCommands(clientId);
-
-  await rest.put(route, { body: commands });
-  console.log(`[discord-bot] Registered ${commands.length} slash command(s)${devGuildId ? " (dev guild)" : " (global)"}`);
+  await rest.put(Routes.applicationCommands(clientId), { body: commands });
+  console.log(`[discord-bot] Registered ${commands.length} slash command(s) (global)`);
 }
 
 // ── Command handlers ─────────────────────────────────────────────────────────
