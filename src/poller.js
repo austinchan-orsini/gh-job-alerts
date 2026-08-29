@@ -24,7 +24,14 @@ const DRY_RUN = process.env.DRY_RUN === "true";
 
 export let lastPollSummary = null;
 
-export async function pollAll() {
+/**
+ * @param {{ silent?: boolean }} opts - silent:true marks new jobs as seen
+ *   (and advances last_sha) without alerting anyone. Used for the very first
+ *   poll on process startup, so waking up after being offline for a while
+ *   doesn't blast out the entire backlog that piled up in the meantime —
+ *   only jobs found on later, ongoing polls get alerted.
+ */
+export async function pollAll(opts = {}) {
   const repos = listRepos().filter((r) => r.enabled);
   console.log(`[poller] Checking ${repos.length} repo(s)…`);
 
@@ -33,7 +40,7 @@ export async function pollAll() {
 
   for (const repo of repos) {
     try {
-      const alerts = await pollRepo(repo);
+      const alerts = await pollRepo(repo, opts);
       totalAlerts += alerts;
       repoResults.push({ repo: `${repo.owner}/${repo.name}`, alerts, error: null });
     } catch (err) {
@@ -46,7 +53,7 @@ export async function pollAll() {
   console.log("[poller] Done.");
 }
 
-async function pollRepo(repo) {
+async function pollRepo(repo, { silent = false } = {}) {
   const { id, owner, name, branch, file_path, last_sha, label, category_filter } = repo;
   const repoSlug = `${owner}/${name}`;
   const repoLabel = label || name;
@@ -108,6 +115,11 @@ async function pollRepo(repo) {
     }
 
     markJobSeen(id, job.hash, job);
+
+    if (silent) {
+      console.log(`  (startup catch-up, not alerting): ${job.company} — ${job.role}`);
+      continue;
+    }
 
     let alerted = false;
 

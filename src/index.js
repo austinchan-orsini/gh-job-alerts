@@ -50,8 +50,12 @@ cron.schedule(DIGEST_CRON, () => {
 console.log(`[digest] Daily summary on schedule: ${DIGEST_CRON}`);
 
 // ── Run one immediate poll on startup ─────────────────────────────────────────
-console.log("[startup] Running initial poll…");
-pollAll().catch(console.error);
+// Silent: if this process was offline for a while, upstream repos may have
+// piled up a backlog of commits/jobs since our last known SHA. We don't want
+// to blast out every job that accumulated while we were down — just catch
+// last_sha up quietly, then alert normally on whatever's new from here on.
+console.log("[startup] Running initial poll (silent catch-up)…");
+pollAll({ silent: true }).catch(console.error);
 
 // ── Discord bot (optional, multi-server) ─────────────────────────────────────
 initDiscordBot().catch((err) => console.error("[discord-bot] Failed to start:", err));
