@@ -1,0 +1,78 @@
+name: gh-job-alerts
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ghjobalerts
+      POSTGRES_PASSWORD: ghjobalerts
+      POSTGRES_DB: ghjobalerts
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ghjobalerts"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Emulates AWS SQS locally so the app can be written against the real
+  # aws-sdk without an AWS account or bill — see README's Architecture section.
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://ghjobalerts:ghjobalerts@postgres:5432/ghjobalerts
+      REDIS_URL: redis://redis:6379
+      AWS_ENDPOINT_URL: http://localstack:4566
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["node", "src/alert-worker.js"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://ghjobalerts:ghjobalerts@postgres:5432/ghjobalerts
+      REDIS_URL: redis://redis:6379
+      AWS_ENDPOINT_URL: http://localstack:4566
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+volumes:
+  pgdata:

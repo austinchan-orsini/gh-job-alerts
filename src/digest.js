@@ -11,17 +11,19 @@ import { sendDiscordDigest } from "./discord.js";
 import { sendDigestSms } from "./sms.js";
 
 export async function runDailyDigest() {
-  const repos = listRepos().filter((r) => r.enabled);
+  const repos = (await listRepos()).filter((r) => r.enabled);
 
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 19)
     .replace("T", " ");
 
-  const summary = repos.map((r) => ({
-    label: r.label || r.name,
-    count: countAlertsSince(r.id, since),
-  }));
+  const summary = await Promise.all(
+    repos.map(async (r) => ({
+      label: r.label || r.name,
+      count: await countAlertsSince(r.id, since),
+    }))
+  );
 
   if (process.env.DISCORD_WEBHOOK_URL) {
     try {

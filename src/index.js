@@ -4,8 +4,12 @@
  * Starts:
  *   1. Express web UI on PORT (default 3000)
  *   2. node-cron scheduler that calls pollAll() on POLL_CRON schedule
+ *      (publishes new-job messages to SQS — see poller.js)
  *   3. node-cron scheduler that calls runDailyDigest() on DIGEST_CRON schedule
- *   4. Optional multi-server Discord bot (no-op if DISCORD_BOT_TOKEN unset)
+ *
+ * The Discord bot and the SMS/Discord/bot alert fan-out both live in the
+ * separate alert-worker.js process ("node src/alert-worker.js"), which
+ * consumes the messages this process's poller publishes.
  */
 
 import "dotenv/config";
@@ -13,7 +17,6 @@ import cron from "node-cron";
 import { createServer } from "./server.js";
 import { pollAll } from "./poller.js";
 import { runDailyDigest } from "./digest.js";
-import { initDiscordBot } from "./discord-bot.js";
 
 const PORT = process.env.PORT || 3000;
 const POLL_CRON = process.env.POLL_CRON || "*/10 * * * *";
@@ -52,6 +55,3 @@ console.log(`[digest] Daily summary on schedule: ${DIGEST_CRON}`);
 // ── Run one immediate poll on startup ─────────────────────────────────────────
 console.log("[startup] Running initial poll…");
 pollAll().catch(console.error);
-
-// ── Discord bot (optional, multi-server) ─────────────────────────────────────
-initDiscordBot().catch((err) => console.error("[discord-bot] Failed to start:", err));

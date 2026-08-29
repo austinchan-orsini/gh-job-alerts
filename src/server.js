@@ -26,14 +26,14 @@ export function createServer() {
   app.use(express.json());
 
   // ── Dashboard ───────────────────────────────────────────────────────────────
-  app.get("/", (req, res) => {
-    const repos = listRepos();
-    const alerts = recentAlerts(20);
+  app.get("/", async (req, res) => {
+    const repos = await listRepos();
+    const alerts = await recentAlerts(20);
     res.send(renderDashboard(repos, alerts, req.query.msg, lastPollSummary));
   });
 
   // ── Add repo ────────────────────────────────────────────────────────────────
-  app.post("/repos", (req, res) => {
+  app.post("/repos", async (req, res) => {
     const { url, label, branch, file_path } = req.body;
 
     const parsed = parseGithubUrl(url);
@@ -41,7 +41,7 @@ export function createServer() {
       return res.redirect("/?msg=Invalid+GitHub+URL");
     }
 
-    addRepo({
+    await addRepo({
       owner: parsed.owner,
       name: parsed.name,
       branch: branch || parsed.branch || "main",
@@ -53,22 +53,23 @@ export function createServer() {
   });
 
   // ── Set category filter ─────────────────────────────────────────────────────
-  app.post("/repos/:id/category", (req, res) => {
+  app.post("/repos/:id/category", async (req, res) => {
     const { category_filter } = req.body;
-    setCategoryFilter(Number(req.params.id), category_filter || null);
+    await setCategoryFilter(Number(req.params.id), category_filter || null);
     res.redirect("/?msg=Category+filter+updated");
   });
 
   // ── Toggle repo ─────────────────────────────────────────────────────────────
-  app.post("/repos/:id/toggle", (req, res) => {
-    const repo = listRepos().find((r) => r.id === Number(req.params.id));
-    if (repo) toggleRepo(repo.id, !repo.enabled);
+  app.post("/repos/:id/toggle", async (req, res) => {
+    const repos = await listRepos();
+    const repo = repos.find((r) => r.id === Number(req.params.id));
+    if (repo) await toggleRepo(repo.id, !repo.enabled);
     res.redirect("/");
   });
 
   // ── Delete repo ─────────────────────────────────────────────────────────────
-  app.post("/repos/:id/delete", (req, res) => {
-    removeRepo(Number(req.params.id));
+  app.post("/repos/:id/delete", async (req, res) => {
+    await removeRepo(Number(req.params.id));
     res.redirect("/?msg=Repo+removed");
   });
 
@@ -115,8 +116,8 @@ export function createServer() {
   });
 
   // ── JSON API ─────────────────────────────────────────────────────────────────
-  app.get("/api/repos", (req, res) => res.json(listRepos()));
-  app.get("/api/alerts", (req, res) => res.json(recentAlerts(50)));
+  app.get("/api/repos", async (req, res) => res.json(await listRepos()));
+  app.get("/api/alerts", async (req, res) => res.json(await recentAlerts(50)));
   app.get("/api/health", async (req, res) => {
     const rl = await getRateLimit().catch(() => null);
     res.json({
@@ -201,7 +202,7 @@ function renderDashboard(repos, alerts, msg, pollSummary) {
   const pollStatus = pollSummary
     ? pollSummary.repoResults.map((r) => {
         if (r.error) return `<span style="color:#ef4444">⚠ ${escapeHtml(r.repo)}: ${escapeHtml(r.error)}</span>`;
-        return `${escapeHtml(r.repo)}: ${r.alerts > 0 ? `<strong>${r.alerts} alert(s) sent</strong>` : "no new commits"}`;
+        return `${escapeHtml(r.repo)}: ${r.alerts > 0 ? `<strong>${r.alerts} job(s) queued</strong>` : "no new commits"}`;
       }).join(" &nbsp;|&nbsp; ")
     : "No poll run yet";
 

@@ -11,10 +11,7 @@
  */
 
 import "dotenv/config";
-import { mkdirSync } from "fs";
 import { addRepo, listRepos, setCategoryFilter } from "../src/db.js";
-
-mkdirSync("data", { recursive: true });
 
 // ── Edit this list to suit your needs ────────────────────────────────────────
 const REPOS = [
@@ -25,7 +22,8 @@ const REPOS = [
     label: "SimplifyJobs",
   },
   {
-    url: "https://github.com/speedyapply/2026-SWE-College-Jobs",
+    // Renamed upstream from 2026-SWE-College-Jobs when the school year rolled over.
+    url: "https://github.com/speedyapply/2027-SWE-College-Jobs",
     branch: "main",
     filePath: "README.md",
     label: "SpeedyApply SWE",
@@ -42,7 +40,7 @@ function parseOwnerName(url) {
 
 for (const repo of REPOS) {
   const { owner, name } = parseOwnerName(repo.url);
-  const result = addRepo({
+  const result = await addRepo({
     owner,
     name,
     branch: repo.branch,
@@ -52,8 +50,8 @@ for (const repo of REPOS) {
   if (result.changes > 0) {
     console.log(`✅ Added: ${owner}/${name} (${repo.label})`);
     if (repo.categoryFilter) {
-      const added = listRepos().find((r) => r.owner === owner && r.name === name);
-      if (added) setCategoryFilter(added.id, repo.categoryFilter);
+      const added = (await listRepos()).find((r) => r.owner === owner && r.name === name);
+      if (added) await setCategoryFilter(added.id, repo.categoryFilter);
     }
   } else {
     console.log(`⚠️  Already exists: ${owner}/${name}`);
@@ -61,6 +59,8 @@ for (const repo of REPOS) {
 }
 
 console.log("\nCurrent repos in DB:");
-listRepos().forEach((r) =>
+(await listRepos()).forEach((r) =>
   console.log(`  [${r.id}] ${r.owner}/${r.name} @ ${r.branch}/${r.file_path} — ${r.label}`)
 );
+
+process.exit(0);

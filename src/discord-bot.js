@@ -117,7 +117,7 @@ async function handleSetChannel(interaction) {
   if (!requireManageGuild(interaction)) return;
 
   const channel = interaction.options.getChannel("channel") ?? interaction.channel;
-  upsertGuildChannel(interaction.guildId, channel.id);
+  await upsertGuildChannel(interaction.guildId, channel.id);
 
   let content = `✅ Alerts will be posted in <#${channel.id}>.`;
   const me = interaction.guild?.members?.me;
@@ -138,7 +138,7 @@ async function handleSubscribe(interaction) {
   const repoId = Number(interaction.options.getString("repo", true));
   const category = interaction.options.getString("category");
 
-  const repo = listRepos().find((r) => r.id === repoId);
+  const repo = (await listRepos()).find((r) => r.id === repoId);
   if (!repo) {
     await interaction.reply({
       content: "Repo not found. Use `/list-repos` to see available repos.",
@@ -147,10 +147,10 @@ async function handleSubscribe(interaction) {
     return;
   }
 
-  addGuildSubscription(interaction.guildId, repoId, category);
+  await addGuildSubscription(interaction.guildId, repoId, category);
 
   let content = `✅ Subscribed to **${repo.owner}/${repo.name}**${category ? ` (category: ${category})` : ""}.`;
-  const settings = getGuildSettings(interaction.guildId);
+  const settings = await getGuildSettings(interaction.guildId);
   if (!settings?.channel_id) {
     content += `\n⚠️ No alert channel set yet — run \`/set-channel\` to choose where alerts are posted.`;
   }
@@ -162,8 +162,8 @@ async function handleUnsubscribe(interaction) {
   if (!requireManageGuild(interaction)) return;
 
   const repoId = Number(interaction.options.getString("repo", true));
-  const repo = listRepos().find((r) => r.id === repoId);
-  removeGuildSubscription(interaction.guildId, repoId);
+  const repo = (await listRepos()).find((r) => r.id === repoId);
+  await removeGuildSubscription(interaction.guildId, repoId);
 
   await interaction.reply({
     content: `✅ Unsubscribed from **${repo ? `${repo.owner}/${repo.name}` : `repo #${repoId}`}**.`,
@@ -174,7 +174,7 @@ async function handleUnsubscribe(interaction) {
 async function handleListRepos(interaction) {
   if (!requireManageGuild(interaction)) return;
 
-  const repos = listRepos();
+  const repos = await listRepos();
   if (!repos.length) {
     await interaction.reply({ content: "No repos are configured yet.", flags: MessageFlags.Ephemeral });
     return;
@@ -187,12 +187,12 @@ async function handleListRepos(interaction) {
 async function handleListSubscriptions(interaction) {
   if (!requireManageGuild(interaction)) return;
 
-  const settings = getGuildSettings(interaction.guildId);
+  const settings = await getGuildSettings(interaction.guildId);
   const channelLine = settings?.channel_id
     ? `Alert channel: <#${settings.channel_id}>`
     : "Alert channel: not set (use `/set-channel`)";
 
-  const subs = listGuildSubscriptions(interaction.guildId);
+  const subs = await listGuildSubscriptions(interaction.guildId);
   if (!subs.length) {
     await interaction.reply({
       content: `${channelLine}\nNo repo subscriptions yet — use \`/subscribe\`.`,
@@ -212,12 +212,12 @@ async function handleAutocomplete(interaction) {
 
   let choices;
   if (interaction.commandName === "subscribe") {
-    choices = listRepos().map((r) => ({
+    choices = (await listRepos()).map((r) => ({
       name: `${r.owner}/${r.name}${r.label ? ` (${r.label})` : ""}`,
       value: String(r.id),
     }));
   } else if (interaction.commandName === "unsubscribe") {
-    choices = listGuildSubscriptions(interaction.guildId).map((s) => ({
+    choices = (await listGuildSubscriptions(interaction.guildId)).map((s) => ({
       name: `${s.owner}/${s.name}${s.label ? ` (${s.label})` : ""}`,
       value: String(s.repo_id),
     }));
@@ -282,7 +282,7 @@ export async function initDiscordBot() {
   client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
   client.on(Events.InteractionCreate, handleInteraction);
-  client.on(Events.GuildDelete, (guild) => removeGuild(guild.id));
+  client.on(Events.GuildDelete, (guild) => removeGuild(guild.id).catch(console.error));
   client.once(Events.ClientReady, (c) => console.log(`[discord-bot] Logged in as ${c.user.tag}`));
 
   await client.login(token);

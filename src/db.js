@@ -1,253 +1,226 @@
-import initSqlJs from "sql.js";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+import pg from "pg";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, "../data/alerts.db");
+// Return timestamp columns as raw Postgres text (e.g. "2026-08-29 16:23:10.123+00")
+// instead of parsed Date objects — callers throughout the app slice/format these
+// as strings (e.g. `row.added_at.slice(0, 10)`), same as the sqlite text values
+// this replaces.
+pg.types.setTypeParser(1114, (str) => str); // timestamp
+pg.types.setTypeParser(1184, (str) => str); // timestamptz
 
-mkdirSync(path.dirname(DB_PATH), { recursive: true });
-
-const SQL = await initSqlJs({
-  locateFile: (file) => path.join(__dirname, "../node_modules/sql.js/dist", file),
+// Managed Postgres hosts (Railway, Render, Supabase, RDS, ...) commonly require
+// SSL on connections outside their own private network; the local Docker
+// Compose Postgres doesn't need or support it. Off by default, opt in per env.
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined,
 });
 
-const _db = existsSync(DB_PATH)
-  ? new SQL.Database(readFileSync(DB_PATH))
-  : new SQL.Database();
-
-_db.run(`
+await pool.query(`
   CREATE TABLE IF NOT EXISTS repos (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner       TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    branch      TEXT NOT NULL DEFAULT 'main',
-    file_path   TEXT NOT NULL DEFAULT 'README.md',
-    label       TEXT,
-    enabled     INTEGER NOT NULL DEFAULT 1,
-    last_sha    TEXT,
-    added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    id              SERIAL PRIMARY KEY,
+    owner           TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    branch          TEXT NOT NULL DEFAULT 'main',
+    file_path       TEXT NOT NULL DEFAULT 'README.md',
+    label           TEXT,
+    enabled         BOOLEAN NOT NULL DEFAULT true,
+    last_sha        TEXT,
+    category_filter TEXT,
+    added_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(owner, name, file_path)
   )
 `);
 
-// Migration: add category_filter column to older databases
-{
-  const repoCols = dbAll("PRAGMA table_info(repos)").map((c) => c.name);
-  if (!repoCols.includes("category_filter")) {
-    _db.run("ALTER TABLE repos ADD COLUMN category_filter TEXT");
-  }
-}
-
-_db.run(`
+await pool.query(`
   CREATE TABLE IF NOT EXISTS seen_jobs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          SERIAL PRIMARY KEY,
     repo_id     INTEGER NOT NULL,
     job_hash    TEXT NOT NULL,
     company     TEXT,
     role        TEXT,
     location    TEXT,
     apply_url   TEXT,
-    seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(repo_id, job_hash)
   )
 `);
 
-_db.run(`
+await pool.query(`
   CREATE TABLE IF NOT EXISTS alert_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          SERIAL PRIMARY KEY,
     repo_id     INTEGER,
     company     TEXT,
     role        TEXT,
     sms_sid     TEXT,
-    sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    sent_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
 
-_db.run(`
+await pool.query(`
   CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id    TEXT PRIMARY KEY,
     channel_id  TEXT,
-    added_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )
 `);
 
-_db.run(`
+await pool.query(`
   CREATE TABLE IF NOT EXISTS guild_subscriptions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              SERIAL PRIMARY KEY,
     guild_id        TEXT NOT NULL,
     repo_id         INTEGER NOT NULL,
     category_filter TEXT,
-    added_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    added_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(guild_id, repo_id)
   )
 `);
 
-save();
-
-function save() {
-  writeFileSync(DB_PATH, Buffer.from(_db.export()));
+async function dbRun(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return { changes: result.rowCount };
 }
 
-function dbRun(sql, params = []) {
-  _db.run(sql, params);
-  const changes = _db.getRowsModified();
-  save();
-  return { changes };
+async function dbGet(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows[0] ?? null;
 }
 
-function dbGet(sql, params = []) {
-  const stmt = _db.prepare(sql);
-  stmt.bind(params);
-  const row = stmt.step() ? stmt.getAsObject() : null;
-  stmt.free();
-  return row;
-}
-
-function dbAll(sql, params = []) {
-  const stmt = _db.prepare(sql);
-  stmt.bind(params);
-  const rows = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return rows;
+async function dbAll(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows;
 }
 
 // ── Repo helpers ──────────────────────────────────────────────────────────────
 
-export function getDb() {
-  return _db;
-}
-
-export function addRepo({ owner, name, branch = "main", filePath = "README.md", label }) {
+export async function addRepo({ owner, name, branch = "main", filePath = "README.md", label }) {
   return dbRun(
-    `INSERT OR IGNORE INTO repos (owner, name, branch, file_path, label)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO repos (owner, name, branch, file_path, label)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (owner, name, file_path) DO NOTHING`,
     [owner, name, branch, filePath, label ?? null]
   );
 }
 
-export function setCategoryFilter(id, categoryFilter) {
-  return dbRun("UPDATE repos SET category_filter = ? WHERE id = ?", [categoryFilter ?? null, id]);
+export async function setCategoryFilter(id, categoryFilter) {
+  return dbRun("UPDATE repos SET category_filter = $1 WHERE id = $2", [categoryFilter ?? null, id]);
 }
 
-export function removeRepo(id) {
-  dbRun("DELETE FROM guild_subscriptions WHERE repo_id = ?", [id]);
-  return dbRun("DELETE FROM repos WHERE id = ?", [id]);
+export async function removeRepo(id) {
+  await dbRun("DELETE FROM guild_subscriptions WHERE repo_id = $1", [id]);
+  return dbRun("DELETE FROM repos WHERE id = $1", [id]);
 }
 
-export function toggleRepo(id, enabled) {
-  return dbRun("UPDATE repos SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
+export async function toggleRepo(id, enabled) {
+  return dbRun("UPDATE repos SET enabled = $1 WHERE id = $2", [!!enabled, id]);
 }
 
-export function listRepos() {
+export async function listRepos() {
   return dbAll("SELECT * FROM repos ORDER BY added_at DESC");
 }
 
-export function getRepo(id) {
-  return dbGet("SELECT * FROM repos WHERE id = ?", [id]);
+export async function getRepo(id) {
+  return dbGet("SELECT * FROM repos WHERE id = $1", [id]);
 }
 
-export function updateLastSha(id, sha) {
-  return dbRun("UPDATE repos SET last_sha = ? WHERE id = ?", [sha, id]);
+export async function updateLastSha(id, sha) {
+  return dbRun("UPDATE repos SET last_sha = $1 WHERE id = $2", [sha, id]);
 }
 
 // ── Seen-job helpers ──────────────────────────────────────────────────────────
 
-export function isJobSeen(repoId, hash) {
-  return !!dbGet("SELECT 1 FROM seen_jobs WHERE repo_id = ? AND job_hash = ?", [repoId, hash]);
+export async function isJobSeen(repoId, hash) {
+  return !!(await dbGet("SELECT 1 FROM seen_jobs WHERE repo_id = $1 AND job_hash = $2", [repoId, hash]));
 }
 
-export function markJobSeen(repoId, hash, { company, role, location, applyUrl }) {
+export async function markJobSeen(repoId, hash, { company, role, location, applyUrl }) {
   return dbRun(
-    `INSERT OR IGNORE INTO seen_jobs (repo_id, job_hash, company, role, location, apply_url)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO seen_jobs (repo_id, job_hash, company, role, location, apply_url)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (repo_id, job_hash) DO NOTHING`,
     [repoId, hash, company, role, location, applyUrl ?? null]
   );
 }
 
-export function recentAlerts(limit = 50) {
+export async function recentAlerts(limit = 50) {
   return dbAll(
     `SELECT al.*, r.owner, r.name
      FROM alert_log al
      LEFT JOIN repos r ON r.id = al.repo_id
-     ORDER BY al.sent_at DESC LIMIT ?`,
+     ORDER BY al.sent_at DESC LIMIT $1`,
     [limit]
   );
 }
 
-export function countAlertsSince(repoId, sinceIso) {
-  const row = dbGet(
-    `SELECT COUNT(*) as cnt FROM alert_log WHERE repo_id = ? AND sent_at >= ?`,
+export async function countAlertsSince(repoId, sinceIso) {
+  const row = await dbGet(
+    `SELECT COUNT(*) as cnt FROM alert_log WHERE repo_id = $1 AND sent_at >= $2`,
     [repoId, sinceIso]
   );
-  return row?.cnt ?? 0;
+  return Number(row?.cnt ?? 0);
 }
 
-export function logAlert({ repoId, company, role, smsSid }) {
+export async function logAlert({ repoId, company, role, smsSid }) {
   return dbRun(
-    `INSERT INTO alert_log (repo_id, company, role, sms_sid) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO alert_log (repo_id, company, role, sms_sid) VALUES ($1, $2, $3, $4)`,
     [repoId, company, role, smsSid]
   );
 }
 
 // ── Discord guild helpers ───────────────────────────────────────────────────
 
-export function upsertGuildChannel(guildId, channelId) {
+export async function upsertGuildChannel(guildId, channelId) {
   return dbRun(
-    `INSERT INTO guild_settings (guild_id, channel_id) VALUES (?, ?)
-     ON CONFLICT(guild_id) DO UPDATE SET channel_id = excluded.channel_id`,
+    `INSERT INTO guild_settings (guild_id, channel_id) VALUES ($1, $2)
+     ON CONFLICT (guild_id) DO UPDATE SET channel_id = excluded.channel_id`,
     [guildId, channelId]
   );
 }
 
-export function getGuildSettings(guildId) {
-  return dbGet("SELECT * FROM guild_settings WHERE guild_id = ?", [guildId]);
+export async function getGuildSettings(guildId) {
+  return dbGet("SELECT * FROM guild_settings WHERE guild_id = $1", [guildId]);
 }
 
-export function removeGuild(guildId) {
-  dbRun("DELETE FROM guild_subscriptions WHERE guild_id = ?", [guildId]);
-  return dbRun("DELETE FROM guild_settings WHERE guild_id = ?", [guildId]);
+export async function removeGuild(guildId) {
+  await dbRun("DELETE FROM guild_subscriptions WHERE guild_id = $1", [guildId]);
+  return dbRun("DELETE FROM guild_settings WHERE guild_id = $1", [guildId]);
 }
 
-export function addGuildSubscription(guildId, repoId, categoryFilter = null) {
+export async function addGuildSubscription(guildId, repoId, categoryFilter = null) {
   return dbRun(
-    `INSERT INTO guild_subscriptions (guild_id, repo_id, category_filter) VALUES (?, ?, ?)
-     ON CONFLICT(guild_id, repo_id) DO UPDATE SET category_filter = excluded.category_filter`,
+    `INSERT INTO guild_subscriptions (guild_id, repo_id, category_filter) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id, repo_id) DO UPDATE SET category_filter = excluded.category_filter`,
     [guildId, repoId, categoryFilter]
   );
 }
 
-export function removeGuildSubscription(guildId, repoId) {
-  return dbRun("DELETE FROM guild_subscriptions WHERE guild_id = ? AND repo_id = ?", [guildId, repoId]);
+export async function removeGuildSubscription(guildId, repoId) {
+  return dbRun("DELETE FROM guild_subscriptions WHERE guild_id = $1 AND repo_id = $2", [guildId, repoId]);
 }
 
-export function setGuildSubscriptionCategory(guildId, repoId, categoryFilter) {
+export async function setGuildSubscriptionCategory(guildId, repoId, categoryFilter) {
   return dbRun(
-    "UPDATE guild_subscriptions SET category_filter = ? WHERE guild_id = ? AND repo_id = ?",
+    "UPDATE guild_subscriptions SET category_filter = $1 WHERE guild_id = $2 AND repo_id = $3",
     [categoryFilter ?? null, guildId, repoId]
   );
 }
 
-export function listGuildSubscriptions(guildId) {
+export async function listGuildSubscriptions(guildId) {
   return dbAll(
     `SELECT gs.*, r.owner, r.name, r.label
      FROM guild_subscriptions gs
      JOIN repos r ON r.id = gs.repo_id
-     WHERE gs.guild_id = ?
+     WHERE gs.guild_id = $1
      ORDER BY r.owner, r.name`,
     [guildId]
   );
 }
 
-export function listSubscribersForRepo(repoId) {
+export async function listSubscribersForRepo(repoId) {
   return dbAll(
     `SELECT gs.guild_id, gs.category_filter, g.channel_id
      FROM guild_subscriptions gs
      JOIN guild_settings g ON g.guild_id = gs.guild_id
-     WHERE gs.repo_id = ? AND g.channel_id IS NOT NULL`,
+     WHERE gs.repo_id = $1 AND g.channel_id IS NOT NULL`,
     [repoId]
   );
 }
