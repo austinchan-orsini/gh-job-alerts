@@ -2,7 +2,7 @@
 
 > Get notified the instant a new job is posted to a GitHub job-board repo — in Discord or via text message.
 
-Watches repos like [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and [speedyapply/2026-SWE-College-Jobs](https://github.com/speedyapply/2026-SWE-College-Jobs) for newly added rows in their job tables, then sends an alert as soon as one shows up.
+Watches repos like [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and [speedyapply/2027-SWE-College-Jobs](https://github.com/speedyapply/2027-SWE-College-Jobs) for newly added rows in their job tables, then sends an alert as soon as one shows up.
 
 ---
 

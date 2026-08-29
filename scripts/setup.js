@@ -25,7 +25,8 @@ const REPOS = [
     label: "SimplifyJobs",
   },
   {
-    url: "https://github.com/speedyapply/2026-SWE-College-Jobs",
+    // Renamed upstream from 2026-SWE-College-Jobs when the school year rolled over.
+    url: "https://github.com/speedyapply/2027-SWE-College-Jobs",
     branch: "main",
     filePath: "README.md",
     label: "SpeedyApply SWE",

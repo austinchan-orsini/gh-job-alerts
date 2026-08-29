@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Node.js service that polls GitHub job-board repos (e.g. SimplifyJobs/Summer2026-Internships, speedyapply/2026-SWE-College-Jobs) for newly added job postings, then sends SMS (Twilio), a Discord webhook, and/or per-server Discord bot alerts. Includes an Express dashboard and a daily digest summary.
+A Node.js service that polls GitHub job-board repos (e.g. SimplifyJobs/Summer2026-Internships, speedyapply/2027-SWE-College-Jobs) for newly added job postings, then sends SMS (Twilio), a Discord webhook, and/or per-server Discord bot alerts. Includes an Express dashboard and a daily digest summary.
 
 ## Commands
 
