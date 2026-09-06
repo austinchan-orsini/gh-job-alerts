@@ -1,14 +1,16 @@
-# 🔔 gh-job-alerts
+# 🔔 Job Pulse
 
 > Get notified the instant a new job is posted to a GitHub job-board repo — in Discord or via text message.
 
-Watches repos like [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and [speedyapply/2027-SWE-College-Jobs](https://github.com/speedyapply/2027-SWE-College-Jobs) for newly added rows in their job tables, then sends an alert as soon as one shows up.
+Popular internship/new-grad job boards like [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and [speedyapply/2027-SWE-College-Jobs](https://github.com/speedyapply/2027-SWE-College-Jobs) are just markdown tables in a GitHub README, updated by maintainers dozens of times a day. There's no RSS feed, no API, and no way to know a row was added without refreshing the page yourself — postings for the best roles often fill up within hours.
+
+Job Pulse solves that by watching the underlying GitHub repo itself: it polls for new commits, diffs the job table to find rows that weren't there before, and pushes an alert the moment one appears — via a shared Discord bot you can add to your own server in one click, or (if you self-host) SMS and a dashboard as well. No more manually refreshing a README hoping to catch a new posting before everyone else does.
 
 ---
 
 ## Add the bot to your Discord server
 
-The fastest way to use gh-job-alerts — no setup, hosting, or code required.
+The fastest way to use Job Pulse — no setup, hosting, or code required.
 
 **[Click here to add the bot to your server](https://discord.com/api/oauth2/authorize?client_id=1515413567346835516&permissions=277025459264&scope=bot%20applications.commands)**
 
@@ -28,7 +30,7 @@ That's it — new postings matching your subscriptions will start showing up in 
 
 ## Prefer SMS, or want to run your own instance?
 
-gh-job-alerts can also run as a self-hosted service that texts you directly via Twilio, in addition to (or instead of) Discord. Self-hosting also gives you a web dashboard for managing watched repos and viewing recent alerts, and lets you run your own independent copy of the Discord bot.
+Job Pulse can also run as a self-hosted service that texts you directly via Twilio, in addition to (or instead of) Discord. Self-hosting also gives you a web dashboard for managing watched repos and viewing recent alerts, and lets you run your own independent copy of the Discord bot.
 
 ### How it works
 
@@ -58,8 +60,8 @@ Twilio → your phone 📱  /  Discord
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/gh-job-alerts
-cd gh-job-alerts
+git clone https://github.com/YOUR_USERNAME/job-pulse
+cd job-pulse
 npm install
 ```
 
@@ -231,7 +233,7 @@ When `pollAll()` finds a new job posting, it's sent to every subscribed server's
 ## Project structure
 
 ```
-gh-job-alerts/
+job-pulse/
 ├── src/
 │   ├── index.js        # Entry point — starts server + cron + bot
 │   ├── server.js       # Express web UI
